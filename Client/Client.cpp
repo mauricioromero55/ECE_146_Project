@@ -1,80 +1,90 @@
-/* A simple server in the internet domain using TCP
-   The port number is passed as an argument */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+#include <iostream>
+#include <string>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <thread>
 
-#pragma comment(lib, "ws2_32.lib")  // Link with Winsock library
+#pragma comment(lib, "ws2_32.lib") // Link with Ws2_32.lib
 
-void error(const char *msg)
-{
-    perror(msg);
-    WSACleanup();  // Clean up Winsock resources on error
-    exit(1);
+#define PORT 8080
+
+using namespace std;
+
+SOCKET client_fd;
+bool running = true; // Control flag for receiving thread
+
+void receive_messages() {
+    char buffer[1024] = { 0 };
+    while (running) {
+        int valread = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+        if (valread > 0) {
+            buffer[valread] = '\0'; // Null-terminate the buffer to print correctly
+            cout << "Message from server: " << buffer << endl;
+        }
+        else {
+            // If recv returns <= 0, we assume the server has closed the connection
+            running = false; // Stop receiving
+        }
+    }
 }
 
-int main(int argc, char *argv[])
-{
+int main() {
     WSADATA wsaData;
-    int iResult;
 
     // Initialize Winsock
-    iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (iResult != 0) {
-        fprintf(stderr, "WSAStartup failed with error: %d\n", iResult);
-        exit(1);
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        cerr << "WSAStartup failed\n";
+        return -1;
     }
 
-    SOCKET sockfd, newsockfd;
-    int portno;
-    struct sockaddr_in serv_addr, cli_addr;
-    int n;
-    socklen_t clilen;
-    char buffer[256];
-
-    if (argc < 2) {
-        fprintf(stderr, "ERROR, no port provided\n");
+    if ((client_fd = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
+        cerr << "Socket creation error\n";
         WSACleanup();
-        exit(1);
+        return -1;
     }
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == INVALID_SOCKET)
-        error("ERROR opening socket");
-
-    memset(&serv_addr, 0, sizeof(serv_addr));  // Zero out the server address structure
-    portno = atoi(argv[1]);  // Convert the port number from a string to an integer
-
+    struct sockaddr_in serv_addr;
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
-    serv_addr.sin_port = htons(portno);
+    serv_addr.sin_port = htons(PORT);
 
-    if (bind(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == SOCKET_ERROR)
-        error("ERROR on binding");
+    // Connect to the server (update IP address as needed)
+    if (inet_pton(AF_INET, "192.168.1.13", &serv_addr.sin_addr) <= 0) {
+        cerr << "Invalid address / Address not supported\n";
+        closesocket(client_fd);
+        WSACleanup();
+        return -1;
+    }
 
-    listen(sockfd, 5);  // Start listening with a backlog of 5 connections
-    clilen = sizeof(cli_addr);
+    if (connect(client_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == SOCKET_ERROR) {
+        cerr << "Connection Failed\n";
+        closesocket(client_fd);
+        WSACleanup();
+        return -1;
+    }
 
-    newsockfd = accept(sockfd, (struct sockaddr*)&cli_addr, &clilen);
-    if (newsockfd == INVALID_SOCKET)
-        error("ERROR on accept");
+    cout << "Connected to server. Type 'exit' to quit.\n";
 
-    memset(buffer, 0, 256);  // Clear the buffer
+    // Start a new thread for receiving messages
+    thread receiver(receive_messages);
 
-    n = recv(newsockfd, buffer, 255, 0);  // Receive message from the client
-    if (n == SOCKET_ERROR) error("ERROR reading from socket");
+    string message;
+    while (true) {
+        cout << "Enter message to server: ";
+        getline(cin, message);
 
-    printf("Here is the message: %s\n", buffer);
+        if (message == "exit") {
+            running = false; // Stop the receiving thread
+            break;
+        }
 
-    n = send(newsockfd, "I got your message", 18, 0);  // Send response to client
-    if (n == SOCKET_ERROR) error("ERROR writing to socket");
+        send(client_fd, message.c_str(), message.size(), 0);
+        cout << "Message sent" << endl;
+    }
 
-    closesocket(newsockfd);
-    closesocket(sockfd);
-    WSACleanup();  // Clean up Winsock
-
+    // Clean up
+    receiver.join(); // Wait for the receiver thread to finish
+    closesocket(client_fd);
+    WSACleanup(); // Cleanup Winsock
     return 0;
 }
-
